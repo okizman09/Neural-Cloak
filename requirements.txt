@@ -1,5 +1,5 @@
 streamlit>=1.20
-opencv-python>=4.7.0
+opencv-python-headless>=4.7.0
 numpy>=1.23
 Pillow>=9.0
 scikit-image>=0.19
