@@ -10,7 +10,6 @@ def test_pipeline():
     pipeline = CloakPipeline(device='cpu')
     print("Running optimization...")
     
-    # Run with lax thresholds to ensure it finishes quickly
     res, metrics, success = pipeline.run(
         img, 
         security_threshold=0.0, # Pass instantly

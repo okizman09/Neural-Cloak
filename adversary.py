@@ -98,15 +98,19 @@ def pgd_attack_targeted(
 ):
     """
     Applied PGD attack constrained to facial features.
+    
+    OPTIMIZATION:
+    Instead of processing the full image (which can be 4K+), we:
+    1. Iterate through each detected face.
+    2. Crop the face with some padding.
+    3. Run PGD on the small crop.
+    4. Paste the adversarial crop back.
     """
     if not _HAS_DEPS:
         raise RuntimeError('Dependencies missing')
 
     device = torch.device(device)
     model = model.to(device)
-    
-    # Prepare data
-    x = _pil_to_torch(orig_img, device)
     
     # 1. Detect faces if not provided
     if not boxes:
@@ -122,111 +126,120 @@ def pgd_attack_targeted(
         print("DEBUG: No faces found for PGD.")
         return orig_img, 0.0
 
-    # Create mask using the decided boxes
-    mask = create_feature_mask(orig_img, boxes).to(device)
+    # We will build the final image by pasting modified crops onto the original
+    final_img = orig_img.copy()
     
-    # Debug mask coverage
-    mask_pixels = mask[0,0,:,:].sum().item()
-    total_pixels = x.shape[2] * x.shape[3]
-    print(f"DEBUG: Mask covers {mask_pixels:.0f} pixels ({mask_pixels/total_pixels*100:.1f}%)")
-
-    # If mask is empty (no faces), fallback to full image or return
-    if mask.sum() == 0:
-        return orig_img, 0.0
-
-    # PGD Setup
-    x_adv = x.clone().detach()
-    x_adv.requires_grad = True
+    total_dist = 0.0
+    processed_count = 0
     
-    eps_scaled = eps / 127.5
-    alpha_scaled = alpha / 127.5
+    print(f"DEBUG: Starting Crop-Based PGD. Eps={eps}, Alpha={alpha}, Steps={steps}, Faces={len(boxes)}")
     
-    # 2. Precompute original embeddings
-    orig_crops = []
+    W_full, H_full = orig_img.size
     
-    # Resize transform for FaceNet (160x160)
-    def get_crop(tensor_img, bx):
-        x_c, y_c, w_c, h_c = bx
-        return tensor_img[:, :, y_c:y_c+h_c, x_c:x_c+w_c]
-
-    for (x_b, y_b, w_b, h_b) in boxes:
-        crop = get_crop(x, (x_b, y_b, w_b, h_b))
-        if crop.shape[2] == 0 or crop.shape[3] == 0: continue
-        resized = F.interpolate(crop, size=(160, 160), mode='bilinear', align_corners=False)
+    for i, (x, y, w, h) in enumerate(boxes):
+        # --- 1. Define Crop Region (add 20% padding) ---
+        pad_w = int(w * 0.2)
+        pad_h = int(h * 0.2)
+        
+        # Coordinates of the ROI in full image
+        cx1 = max(0, x - pad_w)
+        cy1 = max(0, y - pad_h)
+        cx2 = min(W_full, x + w + pad_w)
+        cy2 = min(H_full, y + h + pad_h)
+        
+        # The cropped PIL image
+        crop = orig_img.crop((cx1, cy1, cx2, cy2))
+        
+        # Face coordinates relative to the crop
+        rx = x - cx1
+        ry = y - cy1
+        # rw, rh are just w, h
+        
+        # --- 2. Prepare PGD for this crop ---
+        
+        # Convert crop to tensor
+        x_crop = _pil_to_torch(crop, device)
+        
+        # Create mask for this single face relative to crop
+        # create_feature_mask expects a list of boxes
+        mask = create_feature_mask(crop, [(rx, ry, w, h)]).to(device)
+        
+        # Make working copy
+        x_adv = x_crop.clone().detach()
+        x_adv.requires_grad = True
+        
+        eps_scaled = eps / 127.5
+        alpha_scaled = alpha / 127.5
+        
+        # Compute original embedding target for this face
+        # Extract face from crop tensor
+        def get_face_tensor(tensor_img, rect):
+            bx, by, bw, bh = rect
+            return tensor_img[:, :, by:by+bh, bx:bx+bw]
+            
+        orig_face_t = get_face_tensor(x_crop, (rx, ry, w, h))
+        if orig_face_t.shape[2] == 0 or orig_face_t.shape[3] == 0:
+            print(f"DEBUG: Skipped face {i} due to empty crop.")
+            continue
+            
+        # Target embedding
         with torch.no_grad():
-            orig_crops.append(model(resized).detach())
+             orig_resized = F.interpolate(orig_face_t, size=(160, 160), mode='bilinear', align_corners=False)
+             target_emb = model(orig_resized).detach()
 
-    # No optimizer needed for manual PGD
-    
-    print(f"DEBUG: Starting PGD. Eps={eps}, Alpha={alpha}, Steps={steps}")
-
-    for i in range(steps):
-        if x_adv.grad is not None:
-             x_adv.grad.zero_()
+        # --- 3. Run Optimization Loop ---
+        final_loss = 0.0
+        
+        for step in range(steps):
+             if x_adv.grad is not None:
+                 x_adv.grad.zero_()
              
-        loss = 0
-        valid_crops = 0
+             # Get adversarial face
+             adv_face_t = get_face_tensor(x_adv, (rx, ry, w, h))
+             adv_resized = F.interpolate(adv_face_t, size=(160, 160), mode='bilinear', align_corners=False)
+             adv_emb = model(adv_resized)
+             
+             # Loss (Minimize Cosine Similarity)
+             sim = F.cosine_similarity(adv_emb, target_emb)
+             loss = sim.mean()
+             
+             loss.backward()
+             
+             # Update with mask
+             grad = x_adv.grad.data
+             grad_masked = grad * mask
+             
+             x_adv.data = x_adv.data - alpha_scaled * grad_masked.sign()
+             
+             # Projection
+             delta = torch.clamp(x_adv.data - x_crop, -eps_scaled, eps_scaled)
+             x_adv.data = torch.clamp(x_crop + delta, -1.0, 1.0)
+             
+             final_loss = loss.item()
         
-        # Compute adversarial embeddings
-        for idx, (x_b, y_b, w_b, h_b) in enumerate(boxes):
-            if idx >= len(orig_crops): break
-            
-            adv_crop = get_crop(x_adv, (x_b, y_b, w_b, h_b))
-            if adv_crop.shape[2] == 0 or adv_crop.shape[3] == 0: continue
-            
-            adv_resized = F.interpolate(adv_crop, size=(160, 160), mode='bilinear', align_corners=False)
-            adv_emb = model(adv_resized)
-            
-            # Loss: Maximize Cosine Distance
-            # Cosine Similarity is [-1, 1]. 1 = Same, -1 = Opposite.
-            # We want to minimize similarity.
-            sim = F.cosine_similarity(adv_emb, orig_crops[idx])
-            loss += sim.mean()
-            valid_crops += 1
-            
-        if valid_crops == 0:
-            break 
-            
-        loss.backward()
+        # --- 4. Finalize Crop ---
         
-        # Update with Mask Constraint
-        grad = x_adv.grad.data
-        grad_masked = grad * mask 
+        # Compute final distance for reporting
+        with torch.no_grad():
+             final_face_t = get_face_tensor(x_adv, (rx, ry, w, h))
+             final_resized = F.interpolate(final_face_t, size=(160, 160), mode='bilinear', align_corners=False)
+             final_emb_check = model(final_resized)
+             dist = torch.norm(final_emb_check - target_emb).item()
+             total_dist += dist
+             processed_count += 1
         
-        # Ascent: We want to MINIMIZE similarity, so we move AGAINST the gradient of similarity.
-        # Loss was 'sim'. So grad is d(sim)/dx. We want to decrease sim.
-        # x = x - alpha * grad
+        # Convert back to PIL
+        adv_crop_pil = _torch_to_pil(x_adv)
         
-        x_adv.data = x_adv.data - alpha_scaled * grad_masked.sign()
+        # Paste back
+        final_img.paste(adv_crop_pil, (cx1, cy1))
         
-        # Projection
-        delta = torch.clamp(x_adv.data - x, -eps_scaled, eps_scaled)
-        x_adv.data = torch.clamp(x + delta, -1.0, 1.0)
-        
-        # Debug
-        if i % 2 == 0:
-             print(f"DEBUG: Step {i}, Loss(Sim)={loss.item()/valid_crops:.3f}, GradMag={grad_masked.abs().mean().item():.5f}")
-        
-    # Final check
-    dist_sum = 0
-    count = 0
-    with torch.no_grad():
-        for idx, (x_b, y_b, w_b, h_b) in enumerate(boxes):
-            if idx >= len(orig_crops): break
-            adv_crop = get_crop(x_adv, (x_b, y_b, w_b, h_b))
-            adv_resized = F.interpolate(adv_crop, size=(160, 160), mode='bilinear', align_corners=False)
-            final_emb = model(adv_resized)
-            
-            # L2 dist
-            d = torch.norm(final_emb - orig_crops[idx]).item()
-            dist_sum += d
-            count += 1
-            
-    avg_dist = dist_sum / count if count > 0 else 0.0
-    print(f"DEBUG: Final Dist={avg_dist:.3f}")
-    
-    return _torch_to_pil(x_adv), avg_dist
+        # print(f"DEBUG: Face {i} done. Dist={dist:.2f}")
 
+    avg_dist = total_dist / processed_count if processed_count > 0 else 0.0
+    print(f"DEBUG: Final Avg Dist={avg_dist:.3f}")
+    
+    return final_img, avg_dist
 # Alias for compatibility if needed
 lite_adversarial_attack = pgd_attack_targeted
 pgd_attack_embedding = pgd_attack_targeted

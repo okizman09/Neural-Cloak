@@ -96,7 +96,7 @@ with tabs[0]:
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Original")
-            st.image(img, use_container_width=True)
+            st.image(img, width="stretch")
             
         st.divider()
         st.subheader("Configuration")
@@ -194,7 +194,7 @@ with tabs[0]:
             
             with col2:
                 st.subheader("Protected Result")
-                st.image(cloaked_img, use_container_width=True)
+                st.image(cloaked_img, width="stretch")
                 
                 st.divider()
                 st.subheader("Status Report")
@@ -203,8 +203,6 @@ with tabs[0]:
                 ai_dist = None
                 if 'final_metrics' in locals() and final_metrics:
                     ai_dist = final_metrics.get('security', 0.0)
-                elif embeddings_ok is not None:
-                     ai_dist = embeddings_ok
 
                 # Primary Status
                 is_secure = False
