@@ -59,6 +59,21 @@ with st.sidebar:
     **Privacy:**
     Your photos are processed locally (if running locally) or in this session only. We do not store them.
     """)
+
+    # CSS to hide the default "Limit 200MB" text which is confusing
+    st.markdown("""
+        <style>
+        /* Hide the default limit text inside the file uploader dropzone */
+        [data-testid="stFileUploadDropzone"] div div::before {content: "";}
+        [data-testid="stFileUploadDropzone"] small {
+            display: none !important;
+        }
+        /* Extra specificity just in case */
+        section[data-testid="stFileUploadDropzone"] > div > div > small {
+            display: none !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
     with st.expander("Advanced / Debug"):
         seed = st.number_input("Random seed", value=0)
@@ -86,7 +101,10 @@ with tabs[0]:
     st.header("Protect Your Image")
     st.markdown("Prevent AI from recognizing faces in your photos while keeping them looking natural.")
     
-    uploaded = st.file_uploader("Choose an image (JPEG/PNG)", key="cloak_upload")
+    with st.container(border=True):
+        st.write("### 📤 Upload Photo")
+        st.info("Limit: 5MB per file • Formats: PNG, JPEG")
+        uploaded = st.file_uploader("Choose an image", type=["png", "jpg", "jpeg"], key="cloak_upload", label_visibility="collapsed")
     img, err = validate_upload(uploaded)
     
     if err:
@@ -251,7 +269,10 @@ with tabs[1]:
         st.subheader("Apply Invisible Watermark")
         st.markdown("Upload any image to embed a hidden, unique ID.")
         
-        uploaded_apply = st.file_uploader("Upload image to watermark", key="apply_wm_up")
+        with st.container(border=True):
+            st.markdown("### 📤 Source Image")
+            st.caption("Limit: 5MB • Formats: PNG, JPEG")
+            uploaded_apply = st.file_uploader("Upload image to watermark", type=["png", "jpg", "jpeg"], key="apply_wm_up", label_visibility="collapsed")
         img_apply, err_apply = validate_upload(uploaded_apply)
         
         if err_apply:
@@ -290,7 +311,10 @@ with tabs[1]:
         st.subheader("Verify Watermark")
         st.markdown("Upload an image to check if it contains a Neural Cloak invisible signature.")
         
-        uploaded_wm = st.file_uploader("Upload image to verify", key="verify_wm")
+        with st.container(border=True):
+            st.markdown("### 🕵️‍♀️ Verify Image")
+            st.caption("Limit: 5MB • Formats: PNG, JPEG")
+            uploaded_wm = st.file_uploader("Upload image to verify", type=["png", "jpg", "jpeg"], key="verify_wm", label_visibility="collapsed")
         img_wm, err_wm = validate_upload(uploaded_wm)
         
         if img_wm is not None:
