@@ -13,7 +13,8 @@ class CloakPipeline:
     def _init_models(self):
         if self.model is None:
             if not adversary.has_deps():
-                raise RuntimeError("Dependency Error: Torch not found.")
+                err = adversary.get_import_error() or "Torch not found"
+                raise RuntimeError(f"Dependency Error: {err}")
             
             self.model = adversary.load_embedding_model(self.device)
             self.metrics = CloakMetrics(self.device)

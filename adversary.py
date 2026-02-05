@@ -15,12 +15,17 @@ try:
     import torch.nn.functional as F
     from facenet_pytorch import InceptionResnetV1
     _HAS_DEPS = True
+    _IMPORT_ERROR = None
 except ImportError as e:
     print(f"DEBUG: Import Error in adversary: {e}")
+    _IMPORT_ERROR = str(e)
     torch = None
     F = None
     InceptionResnetV1 = None
     _HAS_DEPS = False
+
+def get_import_error():
+    return _IMPORT_ERROR
 
 def has_deps() -> bool:
     return _HAS_DEPS
