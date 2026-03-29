@@ -1,60 +1,55 @@
 import logging
 import os
 import time
+import requests
 
-# Configure logging to print meaningful output for debugging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-def cleanup_old_files():
+def keep_app_awake():
     """
-    Placeholder: Clean up old uploaded images or temporary files.
+    Pings the Streamlit application URL to prevent it from going to sleep.
+    Streamlit Community Cloud puts apps to sleep after 7 days of inactivity.
+    This creates simulated activity so the inactivity timer is constantly reset.
     """
-    logger.info("Starting cleanup of old temporary files...")
-    # Add logic here: e.g., os.listdir() on temp directories, check os.path.getmtime(), os.remove()
-    time.sleep(1) # Simulated delay
-    logger.info("Cleanup successful.")
+    app_url = os.environ.get("STREAMLIT_APP_URL")
+    
+    if not app_url:
+        logger.warning("STREAMLIT_APP_URL environment variable is missing!")
+        logger.warning("Skipping wake-up ping. Please add it to your GitHub Secrets.")
+        return
 
-def precompute_ai_outputs():
-    """
-    Placeholder: Refresh or precompute AI outputs.
-    """
-    logger.info("Refreshing precomputed AI outputs...")
-    # Add logic here: query database, run batch inference, and store results back
-    time.sleep(1) # Simulated delay
-    logger.info("AI output refresh successful.")
-
-def upload_usage_statistics():
-    """
-    Placeholder: Log and compile usage statistics.
-    """
-    logger.info("Compiling and sending usage statistics...")
-    # Add logic here: capture basic engagement stats and store them, or send external ping
-    time.sleep(1) # Simulated delay
-    logger.info("Usage statistics compiled.")
+    logger.info(f"Pinging Streamlit App at: {app_url} ...")
+    
+    try:
+        # We don't care about the 303 redirect or authentication failures. 
+        # The mere act of the HTTP request hitting the server resets the activity timer!
+        response = requests.get(app_url, timeout=15)
+        logger.info(f"Ping completed! Server responded with HTTP {response.status_code}")
+        
+    except requests.exceptions.Timeout:
+        logger.error("Ping timed out. The server might be asleep or starting up.")
+    except Exception as e:
+        logger.error(f"Failed to ping the app: {e}")
 
 def main():
-    """
-    Main entry point for scheduled background tasks.
-    """
     logger.info("=== Starting Scheduled Tasks ===")
     start_time = time.time()
     
     try:
-        cleanup_old_files()
-        precompute_ai_outputs()
-        upload_usage_statistics()
+        keep_app_awake()
+        
+        # You can add future background analytical or cleanup tasks here
         
         elapsed_time = time.time() - start_time
         logger.info(f"=== Scheduled Tasks Completed Successfully in {elapsed_time:.2f} seconds ===")
         
     except Exception as e:
         logger.error(f"Scheduled Task Failed: {e}", exc_info=True)
-        # Re-raise to ensure GitHub Actions registers the run as a failure state 
-        # so you get notification of failure.
         raise
 
 if __name__ == "__main__":

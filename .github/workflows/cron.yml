@@ -29,9 +29,7 @@ jobs:
       - name: Run scheduled tasks
         env:
           # Securely pass necessary secrets from GitHub Settings > Secrets
-          # Un-comment and update these as needed
-          # DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          # API_KEY: ${{ secrets.API_KEY }}
+          STREAMLIT_APP_URL: ${{ secrets.STREAMLIT_APP_URL }}
           ENV: production
         run: |
           python task.py
